@@ -1,0 +1,52 @@
+DIGEST 53ea52305ddec498fee58e304f78b351
+FSubtypeCorrectness.syntax
+ind 10:13 <> type
+constr 28:31 <> atom
+constr 50:55 <> tuple1
+constr 75:80 <> tuple2
+constr 108:112 <> union
+R38:41 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R42:45 SubtypeCorrectness.syntax <> type ind
+R35:37 Coq.Init.Datatypes <> nat ind
+R63:66 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R67:70 SubtypeCorrectness.syntax <> type ind
+R59:62 SubtypeCorrectness.syntax <> type ind
+R88:91 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R96:99 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R100:103 SubtypeCorrectness.syntax <> type ind
+R92:95 SubtypeCorrectness.syntax <> type ind
+R84:87 SubtypeCorrectness.syntax <> type ind
+R120:123 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R128:131 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R132:135 SubtypeCorrectness.syntax <> type ind
+R124:127 SubtypeCorrectness.syntax <> type ind
+R116:119 SubtypeCorrectness.syntax <> type ind
+ind 151:159 <> type_vars
+constr 173:177 <> vatom
+constr 202:208 <> vtuple1
+constr 238:244 <> vtuple2
+constr 287:292 <> vunion
+constr 335:343 <> vunionall
+constr 373:376 <> vvar
+R184:187 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R188:196 SubtypeCorrectness.syntax <> type_vars ind
+R181:183 Coq.Init.Datatypes <> nat ind
+R221:224 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R225:233 SubtypeCorrectness.syntax <> type_vars ind
+R212:220 SubtypeCorrectness.syntax <> type_vars ind
+R257:260 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R270:273 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R274:282 SubtypeCorrectness.syntax <> type_vars ind
+R261:269 SubtypeCorrectness.syntax <> type_vars ind
+R248:256 SubtypeCorrectness.syntax <> type_vars ind
+R305:308 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R318:321 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R322:330 SubtypeCorrectness.syntax <> type_vars ind
+R309:317 SubtypeCorrectness.syntax <> type_vars ind
+R296:304 SubtypeCorrectness.syntax <> type_vars ind
+R356:359 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R360:368 SubtypeCorrectness.syntax <> type_vars ind
+R347:355 SubtypeCorrectness.syntax <> type_vars ind
+R383:386 Coq.Init.Logic <> ::type_scope:x_'->'_x not
+R387:395 SubtypeCorrectness.syntax <> type_vars ind
+R380:382 Coq.Init.Datatypes <> nat ind
