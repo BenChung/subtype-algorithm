@@ -8,7 +8,9 @@ Require Import Coq.Logic.Decidable.
 Require Import Coq.Program.Equality.
 Require Import Coq.Logic.EqdepFacts.
 
-(* Module JuliaSub. *)
+(* algorithmic normalization 
+   computes the list of normalized clauses for a given type
+*)
 Fixpoint clauses(t:type): list type :=
   match t with
   | atom n => (atom n)::nil
@@ -18,6 +20,8 @@ Fixpoint clauses(t:type): list type :=
   | union t1 t2 => (clauses t1) ++ (clauses t2)
   end.
 
+
+(* Containment in the algorthmic normalization is equivalent to the InType proposition *)
 Theorem clauses_in_type : forall t t', In t (clauses t') <-> InType t t'.
 Proof.
   intros. generalize dependent t. induction t'.
@@ -39,7 +43,8 @@ Proof.
     + intros. inject H; [apply IUnionL|apply IUnionR]; assumption.
     + intros. inject H; [left|right]; assumption.
 Qed.
-      
+
+(* Simple union-less subtyping, written in proof-generating style *)
 Fixpoint base_subtype(t1 t2:type) : {BaseSubtype t1 t2} +
                                     {~(BaseSubtype t1 t2)}.
 Proof.
@@ -70,6 +75,15 @@ Proof.
   - left. constructor; assumption.
 Defined.
 
+(* we will proceed through three different subtyping algorithms each of which uses a different iteration
+  strategy and prove that they all decide standard subtyping (denoted NormalSubtype). 
+
+   We will begin with straightforward normalization. We proceed through two helper fixpoints that will
+   decide inclusion between types and lists and lists and lists wrt base subtyping, then use them along
+   with the algorithmic clauses function to decide subtyping using normalization. Note that these functions 
+   require the evaluation of clauses, so nessecarily require exponential space to run *)
+
+(* find a t' in ts such that t <: t'. Provide proof. *)
 Fixpoint find_subtype(t:type)(ts:list type) : { t':type | In t' ts /\ BaseSubtype t t'} + {forall t', In t' ts -> ~ BaseSubtype t t'}.
 Proof.
   destruct ts.
@@ -83,6 +97,7 @@ Proof.
         ** apply n0. apply H.
 Defined.
 
+(* show that for every t1 in ts1, there exists a t2 in ts2 such that t1 <: t2 with proof of completeness *)
 Fixpoint th_subtype(ts1 ts2: list type) : {forall t1, In t1 ts1 -> exists t2, In t2 ts2 /\ BaseSubtype t1 t2} +
                                           {exists t1, In t1 ts1 /\ forall t2, In t2 ts2 -> ~BaseSubtype t1 t2}.
 Proof.
@@ -97,6 +112,7 @@ Proof.
     + right. exists t. split; [apply in_eq|]. apply n.
 Defined.
 
+(* subtyping via normalization *)
 Definition normalize_subtype(t1 t2:type) : {NormalSubtype t1 t2} + { ~(NormalSubtype t1 t2)}.
 Proof.
   destruct (th_subtype (clauses t1) (clauses t2)).
@@ -106,6 +122,13 @@ Proof.
     rewrite<- clauses_in_type in H1.  apply H2 in H1. contradiction.
 Defined.
 
+(* with normalization out of the way, we can continue onto the meat of our contribution, the
+   iterator-based subtyping algorithm. At a high level, the iterator-based algorithm "ticks"
+   an iterator through each type, checking that there is a choice of the right iterator for
+   every one of the left iterator's choice states. 
+
+   To begin with, we will start by definining an iterator: *)
+
 Inductive TypeIterator: type -> Set :=
 | TIAtom : forall i, TypeIterator (atom i)
 | TITuple1 : forall tp, TypeIterator tp -> TypeIterator (tuple1 tp)
@@ -113,6 +136,8 @@ Inductive TypeIterator: type -> Set :=
 | TIUnionL : forall t1 t2, TypeIterator t1 -> TypeIterator (union t1 t2)
 | TIUnionR : forall t1 t2, TypeIterator t2 -> TypeIterator (union t1 t2).
 
+
+(* decides the iniital state for a type iterator over a given type *)
 Fixpoint start_iterator (t:type):TypeIterator t :=
   match t with
   | (atom i) => TIAtom i
@@ -121,6 +146,8 @@ Fixpoint start_iterator (t:type):TypeIterator t :=
   | (union t1 t2) => TIUnionL t1 t2 (start_iterator t1)
   end.
 
+(* takes a state and then steps it to the next one, by flipping the final
+   left choice to a right and padding the type out to length.  *)
 Fixpoint next_state (t:type)(ti:TypeIterator t) : option (TypeIterator t) :=
   match ti with
   | TIAtom i => None
@@ -142,6 +169,7 @@ Fixpoint next_state (t:type)(ti:TypeIterator t) : option (TypeIterator t) :=
   | TIUnionR ti1 ti2 pr => option_map (TIUnionR ti1 ti2) (next_state ti2 pr)
   end.
 
+(* produces the type at th ecurrent state of the iterator *)
 Fixpoint current (t:type)(ti:TypeIterator t):type :=
   match ti with
   | TIAtom i => atom i
@@ -151,6 +179,7 @@ Fixpoint current (t:type)(ti:TypeIterator t):type :=
   | TIUnionR ti1 ti2 pr => (current ti2 pr)
   end.
 
+(* counts the total number of steps an iterator will take over a given type *)
 Fixpoint total_num (t:type):nat :=
   match t with
   | atom i => 1
@@ -159,6 +188,8 @@ Fixpoint total_num (t:type):nat :=
   | union t1 t2 => (total_num t1) + (total_num t2)
   end.
 
+(* counts the total number of steps the given iterator ti has remaining over 
+   type t *)
 Fixpoint iternum (t:type)(ti:TypeIterator t):nat :=
   match ti with
   | TIAtom i => 0
@@ -169,6 +200,8 @@ Fixpoint iternum (t:type)(ti:TypeIterator t):nat :=
   | TIUnionR ti1 ti2 pr => (iternum ti2 pr)
   end.
 
+(* some helper tactics. the use of dependent types in type iterator means that we end up 
+   making equality arguments based on them a lot *)
 
 Ltac open_exists :=
   match goal with [H : ex _ |- _ ] => destruct H  end.
@@ -179,6 +212,8 @@ Ltac eqdep_eq :=
 
 Definition type_tupler := (fun x : type * type => let (ti1, ti2) := x in tuple2 ti1 ti2).
 
+(* the remaining relation relates type iterators to the list of types that remain to be
+   stepped through. *)
 Inductive Remaining  : forall t, TypeIterator t -> list type -> Prop :=
 | TRemAtom : forall i, Remaining (atom i) (TIAtom i) ((atom i)::nil)
 | TRemTuple1 : forall ti ii ls, Remaining ti ii ls -> Remaining (tuple1 ti) (TITuple1 ti ii) (map tuple1 ls)
@@ -187,6 +222,7 @@ Inductive Remaining  : forall t, TypeIterator t -> list type -> Prop :=
 | TRemUnionL : forall t1 t2 ii ls, Remaining t1 ii ls -> Remaining (union t1 t2) (TIUnionL t1 t2 ii) (ls ++ clauses t2)
 | TRemUnionR : forall t1 t2 ii ls, Remaining t2 ii ls -> Remaining (union t1 t2) (TIUnionR t1 t2 ii) (ls).
 
+(* simple helpers for option_map *)
 Lemma option_map_spec1 : forall A B (e:B) (f:A->B) (x:option A), option_map f x = Some e -> exists v, x = Some v.
 Proof.
   intros. destruct x.
@@ -201,6 +237,8 @@ Proof.
   - auto.
 Qed.
 
+(* there is always at least one element remaining in the iterator, the element the iterator
+   is "sitting" on *)
 Lemma always_nonempty : forall t it l,
     Remaining t it l -> exists h, exists tl, l=h::tl.
 Proof.
@@ -212,6 +250,7 @@ Proof.
   - eexists; eauto.
 Qed.
 
+(* an initial iterator has the full set of normalized clauses remaining to be iterated *)
 Lemma iterator_has_clauses :
   forall t, Remaining t (start_iterator t) (clauses t).
 Proof.
@@ -228,6 +267,7 @@ Proof.
   - assumption.
 Qed.
 
+(* if the next state is none, then the only remaining element is the one you're sitting on. *)
 Lemma next_empty : forall t it ls, next_state t it = None -> Remaining t it ls -> exists l, ls = l :: nil.
 Proof.
   intros. dependent induction it; cbn in H. 
@@ -243,6 +283,8 @@ Proof.
     eapply IHit in H; [|apply H5]. auto.
 Qed.
 
+(* if there is some non-empty list remaining and the next state exists, then it will have the
+   tail of the original list remaining. you can see the induction principle coming? *)
 Lemma next_step_next : forall t it it' h l,
     Remaining t it (h::l) -> next_state t it = Some it' ->
     Remaining t it' l.
@@ -276,6 +318,7 @@ Proof.
     eqdep_eq. eapply IHit; eauto. 
 Qed.
 
+(* every iterator has some remaining types *)
 Lemma has_remaining : forall t it, exists l, Remaining t it l.
 Proof.
   intros. dependent induction it; try (repeat open_exists; eexists; econstructor; fail).
@@ -286,6 +329,7 @@ Proof.
   - repeat open_exists. eexists. econstructor. eauto.
 Qed.
 
+(* well... *)
 Lemma length_clauses : forall t, total_num t = length (clauses t).
 Proof.
   intros. induction t; cbn. 
@@ -295,7 +339,7 @@ Proof.
   - rewrite app_length. rewrite IHt1. rewrite IHt2. auto.
 Qed.
 
-
+(* the number of remaining choices to be made equals the number produced by iternum *)
 Lemma length_remaining : forall t it l,
     Remaining t it l -> S(iternum t it) = length l.
 Proof.
@@ -311,6 +355,8 @@ Proof.
   - cbn. erewrite IHit; eauto.
 Qed.
 
+(* there are monotonically fewer choices at each step of the iterator 
+   this is the heart of the termination argument *)
 Theorem iternum_monotonic : forall t (s s':TypeIterator t),
     Some(s') = next_state t s -> S(iternum t s') = iternum t s.
 Proof.
@@ -321,6 +367,7 @@ Proof.
   inject H0. congruence. 
 Qed.
 
+(* THe current function produces the first element off of the remaining list *)
 Lemma current_state_head: forall t it a l, Remaining t it (a::l) ->
                                            a=(current t it).
 Proof.
@@ -337,6 +384,7 @@ Proof.
   - intros. inject H. eqdep_eq. apply IHit in H4. subst. cbn. auto.
 Qed.
 
+(* if there's a next state we can't have 0 states remaining *)
 Lemma cannot_be_end : forall t it it',
     next_state t it = Some it' -> iternum t it = 0 -> False.
 Proof.
@@ -344,6 +392,11 @@ Proof.
   rewrite H0 in H. inject H.
 Qed.
 
+(* the meat of our proof. This provides an induction principle over
+   types using type iterators. If you can prove your proposition for the 
+   *final* state, the one for which there is no successor state and if the
+   *following* state has it hold, then it can be said about the entire iterator.
+   additionally, it gives us decidability for a bunch of future things *)
 Fixpoint iter_recti (t : type) (P : TypeIterator t -> Set)
          (pi: forall it, next_state t it = None -> P it)
          (ps : forall it' it'', P it'' -> next_state t it' = Some it'' -> P it')
@@ -360,6 +413,7 @@ Fixpoint iter_recti (t : type) (P : TypeIterator t -> Set)
     rewrite Hneq in Heq; apply eq_add_S in Heq; auto).
 Defined.
 
+(* a convienence wrapper around recti *)
 Definition iter_rect
   (t:type) (P:TypeIterator t -> Set)
            (pi: forall it, next_state t it = None -> P it)
@@ -367,6 +421,8 @@ Definition iter_rect
            (it : TypeIterator t) : P it :=
   iter_recti t P pi ps it (iternum t it) eq_refl. 
 
+(* decide whether there exists a choice on the rhs for every choice 
+   on the lhs, but using induction over type iterators to decide it *)
 Definition exists_iter_inner(a b : type)(it:TypeIterator b) :
   ({ t | forall l, Remaining b it l -> In t l /\ BaseSubtype a t } +
    {forall t l, Remaining b it l -> In t l -> ~(BaseSubtype a t) }).
@@ -396,6 +452,7 @@ Proof.
         ** eapply next_step_next in H; eauto.
 Defined.
 
+(* wrapper around exists_iter_inner *)
 Definition exists_iter(a b : type) : 
   ({ t | InType t b /\ BaseSubtype a t } +
    {forall t, InType t b -> ~(BaseSubtype a t) }).
@@ -406,6 +463,8 @@ Definition exists_iter(a b : type) :
     rewrite clauses_in_type in H0. apply H0 in H. auto.
 Defined.
 
+(* analogous to exists_iter_inner, but this time for the left hand side's forall 
+   quantification. *)
 Definition forall_iter_inner (a b : type) (it : TypeIterator a) :
   { forall l, Remaining a it l ->
               forall t, In t l ->
@@ -441,6 +500,7 @@ Proof.
       * intros. rewrite clauses_in_type in H1. apply n in H1. auto.
 Defined.
 
+(* and the convinence initial state *)
 Definition forall_iter (a b : type) :
   { forall t, In t (clauses a) -> exists t', In t' (clauses b) /\ (BaseSubtype t t')} +
   { exists t, In t (clauses a) /\ forall t', In t' (clauses b) -> ~ (BaseSubtype t t')}.
@@ -450,6 +510,8 @@ Proof.
   - right. pose proof (e _ (iterator_has_clauses a)). auto. 
 Defined.
 
+(* finally, we can decide subtyping soundly and completely using these helpers. Note that
+the resultant theorem is identical despite the very different internals. *)
 Definition subtype(a b:type) : {NormalSubtype a b} + {~NormalSubtype a b}.
   destruct (forall_iter a b).
   - left. unfold NormalSubtype. intros. rewrite<- clauses_in_type in H. apply e in H.
@@ -460,6 +522,11 @@ Definition subtype(a b:type) : {NormalSubtype a b} + {~NormalSubtype a b}.
     + auto.
 Defined.
 
+(* we have shown that the algorithm works with explicit iterators over types. However, 
+we have yet to prove its operation when used with boolean stacks in place of the structural 
+iterators. We now prove that we can decide subtyping using said boolean stacks. *)
+
+(* our boolean stack representation *)
 Definition st_context := list bool.
 
 Fixpoint inner_subtype(a b: type) (fa ex : st_context) (fuel:nat)
