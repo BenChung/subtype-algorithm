@@ -8,6 +8,14 @@ Require Import Coq.Logic.Decidable.
 Require Import Coq.Program.Equality.
 Require Import Coq.Logic.EqdepFacts.
 
+(* 
+the important definitions are:
+* normalize_subtype - subtyping through normalization
+* subtype - subtyping through structural type iterators
+* stack_subtype - subtyping through choice lists
+*)
+
+
 (* algorithmic normalization 
    computes the list of normalized clauses for a given type
 *)
@@ -529,25 +537,8 @@ iterators. We now prove that we can decide subtyping using said boolean stacks. 
 (* our boolean stack representation *)
 Definition st_context := list bool.
 
-Fixpoint inner_subtype(a b: type) (fa ex : st_context) (fuel:nat)
-  : option (st_context*st_context) :=
-  match a, b, fa, ex, fuel with
-  | (union a1 a2), b, false::fa, ex, S n => inner_subtype a1 b fa ex n
-  | (union a1 a2), b, true::fa, ex, S n => inner_subtype a2 b fa ex n
-  | a, (union b1 b2), fa, false::ex, S n => inner_subtype a b1 fa ex n
-  | a, (union b1 b2), fa, true::ex, S n => inner_subtype a b2 fa ex n
-  | (tuple1 a), (tuple1 b), fa, ex, S n => inner_subtype a b fa ex n
-  | (atom i), (atom j), fa, ex, S n =>
-    if Nat.eqb i j then Some(fa, ex) else None
-  | (tuple2 a1 a2), (tuple2 b1 b2), fa, ex, S n =>
-    match inner_subtype a1 b1 fa ex n with
-    | Some(fa', ex') => inner_subtype a2 b2 fa' ex' n
-    | None => None
-    end
-  | _, _, _, _, 0 => None
-  | _, _, _, _, _ => None
-  end.
-
+(* ValidPath sc t sc' means that sc is a valid path for t with some suffix sc', which is needed for 
+   proper handling of tuples *)
 Inductive ValidPath : st_context -> type -> st_context -> Prop :=
 | VPLeft : forall r a b l,  ValidPath r a l-> ValidPath (false::r) (union a b) l
 | VPRight : forall r a b l, ValidPath r b l -> ValidPath (true::r) (union a b) l
@@ -555,6 +546,7 @@ Inductive ValidPath : st_context -> type -> st_context -> Prop :=
 | VPTuple1 : forall t r l, ValidPath r t l -> ValidPath r (tuple1 t) l
 | VPTuple2 : forall t1 t2 r l1 l2, ValidPath r t1 l1 -> ValidPath l1 t2 l2 -> ValidPath r (tuple2 t1 t2) l2.
 
+(* subset a type with a choice list *)
 Fixpoint lookup_path(t:type)(p:st_context) : type * st_context :=
   match t, p with
   | atom i, _ => (t, p)
@@ -568,6 +560,7 @@ Fixpoint lookup_path(t:type)(p:st_context) : type * st_context :=
   | _, nil => (t, nil)
   end.
 
+(* if a path is valid, we can look up the type that it corresponds to *)
 Lemma lookup_remains : forall t p r, ValidPath p t r -> exists t', lookup_path t p = (t',r).
 Proof.
   intros. induction H.
@@ -578,6 +571,7 @@ Proof.
   - cbn. inject IHValidPath1. inject IHValidPath2. rewrite H1. rewrite H2. eexists; eauto.
 Qed.
 
+(* if a path is valid and has some suffix r, then we can add some additional suffix p' onto it to give a resultant suffix r ++ p' *)
 Lemma lookup_left : forall t t' r p p', ValidPath p t r -> forall Hlp : lookup_path t p = (t',r), lookup_path t (p++p') = (t',r++p').
 Proof.
   intros. generalize dependent p. generalize dependent p'. generalize dependent t'. generalize dependent r. induction t;intros.
@@ -594,6 +588,7 @@ Proof.
     + destruct b; cbn in *; inject H; [apply IHt2|apply IHt1]; eauto.
 Qed.
 
+(* same as lookup_left but for ValidPath directly *)
 Lemma valid_extend : forall t p r p', ValidPath p t r -> ValidPath (p ++ p') t (r ++ p').
 Proof.
   intros. induction H; cbn; try (constructor; eauto; fail).
@@ -602,6 +597,7 @@ Proof.
     + apply IHValidPath2.
 Qed.
 
+(* takes a typeiterator and makes it into a path *)
 Fixpoint iterator_to_path(t:type)(it:TypeIterator t):st_context :=
    match it with
    | TIAtom _ => nil
@@ -611,6 +607,7 @@ Fixpoint iterator_to_path(t:type)(it:TypeIterator t):st_context :=
    | TIUnionR _ t2 it1 => true :: (iterator_to_path t2 it1)
    end.
 
+(* all type iterators will be translated into suffix-free paths for the types that they iterate over *)
 Lemma itp_valid : forall t it, ValidPath (iterator_to_path t it) t nil.
 Proof.
   intros. induction it; cbn in *; try (econstructor; eauto; fail).
@@ -618,7 +615,8 @@ Proof.
   - apply valid_extend. eauto.
   - cbn. eauto.
 Qed.
-      
+
+(* the result of looking up the converted path from an iterator is the current state *)
 Lemma itp_correct : forall t it, current t it = fst (lookup_path t (iterator_to_path t it)).
 Proof.
   intros. induction it.
@@ -634,7 +632,7 @@ Proof.
   - cbn in *. eauto.
 Qed.
 
-
+(* see the paper for details; identifies the last left choice in the list, makes it a right, and chops the rest off *)
 Fixpoint flip_last_left(ls:st_context):=
   match ls with
   | false::rs =>
@@ -650,6 +648,8 @@ Fixpoint flip_last_left(ls:st_context):=
   | nil => None
   end.
 
+(* after getting chopped off by flip_last_left, extend_list fixes the end of the list up with
+   lefts until it reaches leaves. also used to produce the inital state when called with an empty initial list *)
 Fixpoint extend_list(t:type)(ls:st_context) :=
   match t,ls with
   | atom i, _ => (nil, ls)
@@ -664,6 +664,7 @@ Fixpoint extend_list(t:type)(ls:st_context) :=
     let (hd,tl) := extend_list l nil in (false :: hd, tl)
   end.
 
+(* helpers *)
 Lemma option_map_spec1' : forall (A B : Type) (e : B) (f : A -> B) (x : option A),
     option_map f x = Some e -> exists v : A, f v = e /\ x = Some v.
 Proof.
@@ -672,6 +673,7 @@ Proof.
   - cbn in H. inject H.
 Qed.
 
+(* every element in a new choice list is false *)
 Lemma new_it_false : forall t l, In l (iterator_to_path t (start_iterator t)) -> l = false.
 Proof.
   intros. induction t; cbn in *. 
@@ -681,6 +683,7 @@ Proof.
   - inject H; [ symmetry | apply IHt1 ]; auto.
 Qed.
 
+(* in a choice list that is finished, every element must be true *)
 Lemma old_it_true :
   forall t it, next_state t it = None ->
                forall el, In el (iterator_to_path t it) -> el = true.
@@ -694,6 +697,12 @@ Proof.
   - apply option_map_spec2 in H. destruct H0; [symmetry|];auto.
 Qed.
 
+(* we can break down a choice list as follows:
+   if ls steps to ls', then the following must be true:
+   ls must consist of some head, followed by a false (a left choice), followed 
+      by some tail that consists solely of trues (right choices). we will flip this choice
+   ls' must consist of that same head, followed by a true (a right choice) in place of the old false, 
+      with the new tail consisting of falses (left choices). *)
 Lemma ns_breakdown : forall t it it' ls ls',
     next_state t it = Some it' ->
     iterator_to_path t it = ls ->
@@ -743,127 +752,7 @@ Proof.
     apply H4. 
 Qed.
 
-Lemma quick_bd : forall t it it',
-    next_state t it = Some it' -> exists hd tl tl',
-      iterator_to_path t it' = hd ++ (true :: tl) /\
-      iterator_to_path t it = hd ++ (false :: tl').
-Proof.
-  intros. eapply ns_breakdown in H; [| apply eq_refl | apply eq_refl].
-  destruct H as [hd [tl [tl' [H0 [H1 [H2 H3]]]]]]. repeat eexists.
-  - apply H1.
-  - apply H0.
-Qed.
-
-Lemma delim_eq : forall hd hd' tl tl',  
-    (forall el, In el tl -> el = true) ->
-    (forall el, In el tl' -> el = true) ->
-    hd ++ false :: tl = hd' ++ false :: tl' ->
-    tl = tl'.
-Proof.
-  intros. generalize dependent hd'. induction hd.
-  - intros. cbn in *. destruct hd'.
-    + cbn in *. inject H1. auto.
-    + cbn in *. inject H1.
-      assert (Hf:false = true).
-      { apply H. apply in_or_app. right. apply in_eq. }
-      inject Hf.
-  - intros; cbn in *. destruct hd'.
-    + cbn in *. inject H1. 
-      assert (Hf:false = true).
-      { apply H0. apply in_or_app. right. apply in_eq. }
-      inject Hf.
-    + cbn in *. inject H1. apply IHhd in H4. auto.
-Qed.
-
-Lemma ns_breakdown_unique : forall t it it' hd tl,
-    next_state t it = Some it' ->
-    iterator_to_path t it = hd ++ (false::tl) ->
-    (forall el, In el tl -> el = true) ->
-    exists tl',
-      iterator_to_path t it' = hd ++ (true :: tl') /\
-      (forall el, In el tl' -> el = false).
-Proof.
-  intros. generalize dependent it'. generalize dependent hd. generalize dependent tl.
-  dependent induction it.
-  - intros. cbn in *. inject H.
-  - intros. cbn in *. apply option_map_spec1' in H. destruct H as [it'' [H2 H3]].
-    rewrite<- H2. cbn. edestruct IHit as [tl'' H4]; try eassumption.
-    subst. eexists. apply H4.
-  - intros. cbn in *. destruct (next_state t2 it2) eqn:Hit2.
-    + inject H. cbn. edestruct ns_breakdown as [hd' [tl' [tl'' [H2 [H3 [H4 H5]]]]]];
-                       [apply Hit2| apply eq_refl | apply eq_refl |]. rewrite H3.
-      rewrite H2 in H0. rewrite app_assoc in H0. pose proof H0. apply delim_eq in H0; auto.
-      subst. apply app_inv_tail in H. subst. rewrite app_assoc. eexists; split; auto.
-    + clear IHit2. destruct (next_state t1 it1) eqn:Hit1.
-      * inject H. cbn. edestruct ns_breakdown as [hd' [tl' [tl'' [H2 [H3 [H4 H5]]]]]];
-                         [apply Hit1 | apply eq_refl | apply eq_refl |]. rewrite H3.
-        rewrite H2 in H0. rewrite<- app_assoc in H0. cbn in H0. pose proof H0.
-        apply delim_eq in H0; [ | | auto ].
-        2:{ intros. apply in_app_or in H6.
-            destruct H6; [ apply H5; auto | eapply old_it_true; eauto]. }
-        subst. apply app_inv_tail in H. subst.
-        exists (tl'' ++ iterator_to_path t2 (start_iterator t2)). split.
-        ** rewrite<- app_assoc. auto.
-        ** intros. apply in_app_or in H.
-           destruct H; [apply H4 in H|apply new_it_false in H]; auto.
-      * inject H.
-  - intros. cbn in *. destruct (next_state t1 it) eqn:Hit1.
-    + inject H. cbn.
-      edestruct ns_breakdown as [hd' [tl' [tl'' [H2 [H3 [H4 H5]]]]]];
-        [ apply Hit1 | apply eq_refl | apply eq_refl | ]. rewrite H3.
-      rewrite H2 in H0. pose proof H0.
-      apply delim_eq with (hd:=(false::hd')) in H0; auto. subst.
-      rewrite app_comm_cons in H. apply app_inv_tail with (l:=(false::tl)) in H.
-      subst. eexists. split; eauto. cbn. auto. 
-    + inject H. cbn. destruct hd; inject H0.
-      * cbn. exists (iterator_to_path t2 (start_iterator t2)). split; auto.
-        intros. apply new_it_false in H. auto. 
-      * assert (Hf:false=true).
-        { eapply old_it_true; [apply Hit1 | ]. rewrite H3. apply in_or_app. right.
-          constructor. auto. }
-        inject Hf.
-  - intros. cbn in *. apply option_map_spec1' in H. inject H. destruct H2.
-    subst. cbn. edestruct ns_breakdown as [hd' [tl' [tl'' [H3 [H4 [H5 H6]]]]]];
-                  [apply H2 | apply eq_refl | apply eq_refl | ].
-    destruct hd.
-    + cbn in H0. inject H0.
-    + cbn in H0. inject H0. rewrite H4. rewrite H8 in H3. pose proof H3.
-      apply delim_eq in H3; auto. subst. apply app_inv_tail in H. subst. cbn.
-      exists tl''. split; auto. 
-Qed.
-
-Lemma ns_decomp : forall t it it',
-    next_state t it = Some it' ->
-    exists hd tl,
-      (forall el, In el tl -> el = true) /\
-      iterator_to_path t it = hd ++ (false::tl).
-Proof.
-  intros. dependent induction it; cbn in *. 
-  - inject H.
-  - apply option_map_spec1' in H. destruct H as [x [H H0]].
-    apply IHit in H0. apply H0.
-  - destruct (next_state t2 it2) eqn:Hns2.
-    + edestruct IHit2 as [hd' [tl' [H0 H1]]]; [apply eq_refl |].
-      exists (iterator_to_path t1 it1 ++ hd'). exists tl'. rewrite H1.
-      rewrite app_assoc. split; auto.
-    + destruct (next_state t1 it1).
-      * edestruct IHit1 as [hd' [tl' [H0 H1]]]; [apply eq_refl|].
-        exists (hd'). exists (tl' ++ iterator_to_path t2 it2). rewrite H1.
-        rewrite<- app_assoc. cbn. split; auto.
-        intros. apply in_app_or in H2. inject H2.
-        ** apply H0; auto.
-        ** eapply old_it_true; eauto.
-      * inject H.
-  - destruct (next_state t1 it) eqn:Hns.
-    + edestruct IHit as [hd' [tl' [H0 H1]]]; eauto. rewrite H1.
-      exists (false::hd'). exists tl'. split; auto.
-    + exists nil. exists (iterator_to_path t1 it). split; auto.
-      intros. apply old_it_true in H0; auto.
-  - apply option_map_spec1' in H. destruct H as [v [H0 H1]]. apply IHit in H1.
-    destruct H1 as [hd' [tl' [H1 H2]]]. rewrite H2. exists (true::hd'). exists tl'.
-    cbn. split; auto.
-Qed.
-
+(* if every element is true (e.g. right), then there is no more state to go *)
 Lemma flip_last_left_emp : forall tl,
     (forall el, In el tl -> el = true) ->
     flip_last_left tl = None.
@@ -874,6 +763,7 @@ Proof.
     intros. apply H. apply in_cons; auto. 
 Qed.
 
+(* kinda the same as ns_breakdown, just for flip_last_left alone and without the suffix *)
 Lemma flip_last_left_corr : forall hd tl,
     (forall el, In el tl -> el = true) -> 
     flip_last_left (hd ++ (false :: tl)) = Some (hd ++ true :: nil).
@@ -883,6 +773,7 @@ Proof.
   - intros. cbn in *. rewrite IHhd; auto. destruct a; auto. 
 Qed.
 
+(* helper for app *)
 Lemma split_app : forall tl a b hd,
     (forall el, In el tl -> el = false) ->
     a ++ b = hd ++ true:: tl ->
@@ -901,13 +792,15 @@ Proof.
         ** destruct H0 as [hd' [H0 H1]]. subst. cbn. right. exists hd'. split; auto.
 Qed.
 
+(* starting an iterator and converting it to a list is equivalent to extending the empty list to a type *)
 Lemma extend_start : forall t, extend_list t nil = (iterator_to_path t (start_iterator t), nil).
 Proof.
   intros. induction t; cbn in *; auto.
   - rewrite IHt1. rewrite IHt2. auto.
   - rewrite IHt1. auto.
 Qed.
-    
+
+(* if every element in a path from an iterator is false, then it must be the initial iterator *)
 Lemma false_empty_it : forall t it, (forall el, In el (iterator_to_path t it) -> el = false) -> it = start_iterator t.
 Proof.
   intros. dependent induction it; cbn in *; auto.
@@ -919,6 +812,7 @@ Proof.
     + inject H0.
 Qed.
 
+(* extend_list will indeed pad the given list out to the correct length for the type *)
 Lemma extends_corr : forall t it,
   (forall hd tl,
       (forall el, In el tl -> el = false) -> 
@@ -954,8 +848,10 @@ Proof.
     + cbn in *. apply IHit.
 Qed.
 
+(* steps a context forward to the next state, using both extend_list and flip_last_left *)
 Definition step_ctx (t : type) (pth:st_context) : option st_context := option_map (fun x => x ++ (fst (extend_list t x))) (flip_last_left pth).
 
+(* step_ctx is equivalent to next_state under iterator_to_path conversion *)
 Lemma list_step_correct_ex : forall t it it',
     next_state t it = Some it' ->
     step_ctx t (iterator_to_path t it) = Some (iterator_to_path t it').
@@ -966,6 +862,7 @@ Proof.
   auto.
 Qed.
 
+(* still equvialent even at the end of the iterator *)
 Lemma list_step_correct_nex : forall t it,
     next_state t it = None ->
     option_map (fun x => x ++ (fst (extend_list t x))) (flip_last_left (iterator_to_path t it)) = None.
@@ -975,6 +872,7 @@ Proof.
   - apply old_it_true; auto.
 Qed.
 
+(* identical for all iterator states, agglomeration of the previous two *)
 Lemma list_step_correct : forall t it,
     step_ctx t (iterator_to_path t it) =
     (option_map (iterator_to_path t) (next_state t it)).
@@ -989,6 +887,7 @@ Ltac hyp_bs :=
 Ltac goal_bs :=
   match goal with [ |- (if (base_subtype ?a ?b) then _ else _) = _ ] => destruct (base_subtype a b) end.
 
+(* we can go from propositional BaseSubtype to base_subtype trivially *)
 Lemma bs_alg : forall a b, BaseSubtype a b -> exists p, base_subtype a b = left p.
 Proof.
   intros. destruct (base_subtype a b).
@@ -996,6 +895,8 @@ Proof.
   - apply n in H. inversion H.
 Qed.
 
+(* exists subtyping! Iterates through the type b using the choice list cex checking
+   using base_subtype if the result is a supertype of a *)
 Fixpoint ex_subtype (a b : type)(cex :st_context)(fuel:nat) : option bool :=
   match base_subtype a (fst (lookup_path b cex)) with
   | left _ => Some true
@@ -1010,6 +911,7 @@ Fixpoint ex_subtype (a b : type)(cex :st_context)(fuel:nat) : option bool :=
     end
   end.
 
+(* there exists some amount of fuel for which ex_subtype will terminate with a concrete result *)
 Lemma ex_sub_len : forall a b, { r | exists n, ex_subtype a b (fst (extend_list b nil)) n = Some r}.
 Proof.
   intros. remember (fst (extend_list b nil)). rewrite extend_start in Heql. cbn in *. remember (start_iterator b). clear Heqt.
@@ -1028,60 +930,29 @@ Proof.
         ** rewrite list_step_correct. rewrite H. cbn. auto.
 Qed.
 
+(* wrapper for the latter *)
 Definition ex_sub_ex : forall (a b : type), bool.
 Proof.
   intros. destruct (ex_sub_len a b). apply x.
 Defined.
 
+(* forall-exists subtyping, which iterates through a using cfa checking using ex_sub_ex if a under cfa is a subtype 
+   of some instantiation of b *)
 Fixpoint fa_ex_subtype (a b : type)(cfa : st_context)(fuel:nat) : option bool :=
-  match fuel with
-  | S n =>
-    match ex_sub_ex (fst (lookup_path a cfa)) b with
-    | true =>
-      match step_ctx a cfa with
-      | Some ns => fa_ex_subtype a b ns n
-      | None => Some true
+  match ex_sub_ex (fst (lookup_path a cfa)) b with
+  | true =>
+    match step_ctx a cfa with
+    | Some ns =>
+      match fuel with
+      | S n =>fa_ex_subtype a b ns n
+      | 0 => None
       end
-    | _ => Some false
+    | None => Some true
     end
-  | 0 => None
+  | _ => Some false
   end.
 
-(* fa_ex_subtype a b ns n exfuel  *)
-
-Lemma iter_equiv: forall t p pf, ValidPath p t pf -> exists it, (iterator_to_path t it) ++ pf = p.
-Proof.
-  intros. induction H.
-  - destruct IHValidPath. eexists (TIUnionL _ _ _). cbn. rewrite H0. auto.
-  - destruct IHValidPath. eexists (TIUnionR _ _ _). cbn. rewrite H0. auto.
-  - eexists (TIAtom _). cbn. auto.
-  - destruct IHValidPath. eexists (TITuple1 _ _). cbn. rewrite H0. auto.
-  - destruct IHValidPath1. destruct IHValidPath2.
-    rewrite<- H1. rewrite<- H2. eexists (TITuple2 _ _ _ _). cbn. rewrite app_assoc. auto.
-Qed.
-
-Inductive RemainingStack : type -> st_context -> list type -> Prop :=
-| RSNext : forall t ctx ctx' rs, RemainingStack t ctx' rs -> step_ctx t ctx = Some ctx' ->
-                              RemainingStack t ctx ((fst (lookup_path t ctx))::rs) 
-| RSEnd : forall t ctx, step_ctx t ctx = None -> RemainingStack t ctx ((fst (lookup_path t ctx))::nil).
-
-Lemma sub_ctx_ind : forall (t : type) (P: st_context -> Prop),
-    (forall e, ValidPath e t nil -> step_ctx t e = None -> P e) ->
-    (forall e e', P e' -> step_ctx t e = Some e' -> P e) ->
-    (forall e, ValidPath e t nil -> P e).
-Proof. 
-  intros. apply iter_equiv in H1. inject H1. rewrite app_nil_r. dependent induction x using iter_rect.
-  - pose proof (list_step_correct t x). rewrite H1 in H2. cbn in *. apply H in H2; [|apply itp_valid]; auto.
-  - eapply H0.
-    + apply IHx1.
-    + rewrite list_step_correct. rewrite H1. auto.
-Qed.
-
-Lemma rs_nonnill : forall b c l, RemainingStack b c l -> exists hd rs, l = hd::rs.
-Proof.
-  intros. inject H; repeat eexists.
-Qed.
-
+(* there is only a single remaining list for any given type and type iterator *)
 Lemma remaining_uniq : forall t it l l', Remaining t it l -> Remaining t it l' -> l = l'.
 Proof.
   intros. generalize dependent l. generalize dependent l'.
@@ -1099,6 +970,8 @@ Proof.
   intros. cbn; auto.
 Qed.
 
+(* if there is some following state and that state has l remaining elements, then  
+   the current state has remaining elements of the current element appended onto the l elements *)
 Lemma remaining_fwd: forall t c1 c2 l, next_state t c1 = Some c2 -> Remaining t c2 l -> Remaining t c1 (current t c1::l).
 Proof.
   intros. generalize dependent c2. generalize dependent l. induction c1; intros; cbn in *.
@@ -1142,6 +1015,7 @@ Proof.
     inject H0. eqdep_eq. eapply IHc1; eauto.
 Qed.
 
+(* there is always some current element for literally every type iterator *)
 Lemma nonempty_rem : forall t it, exists tl, Remaining t it ((current t it)::tl).
 Proof.
   intros.
@@ -1151,6 +1025,8 @@ Proof.
   repeat eexists. apply H.
 Qed.
 
+(* ex_subtype will produce true iff exists_iter_inner (the one with the explicit structural iterator)
+   produces true *)
 Lemma ex_sub_corr_eq : forall a b it,
     (exists pf, exists_iter_inner a b it = inleft pf) <->
                exists n, ex_subtype a b (iterator_to_path b it) n = Some true.
@@ -1212,6 +1088,7 @@ Proof.
            eapply n0 in H1; [|apply in_cons; eauto]. contradict H1. auto.
 Qed.
 
+(* if exists subtyping is not true, then it must be false. No midde ground here *)
 Lemma ex_sub_always_ne : forall a b it, (exists n, ex_subtype a b (iterator_to_path b it) n = Some false) <->
                                         forall m, ex_subtype a b (iterator_to_path b it) m <> Some true.
 Proof.
@@ -1241,22 +1118,29 @@ Proof.
         ** rewrite list_step_correct in *. rewrite H0 in *. cbn in *. apply H1.     
 Qed.
 
+(* helper *)
+Lemma neg_exists_is_forall : (forall t (P : t -> Prop), ~(exists x, P x) <-> forall x, ~ (P x)).
+Proof.
+  repeat intro. split.
+    - repeat intro. apply H. exists x. auto.
+    - repeat intro. destruct H0. contradict H0. apply H.
+Qed.
+
+(* if exists_iter_inner thinks that a b are not subtypes, then so will ex_subtype. Shown by negating
+   both sides of the iff in  ex_sub_corr_eq and using ex_sub_always_ne to get rid of the out-of-fuel cases *)
 Lemma ex_sub_corr_ieq : forall a b it,
     (exists pf, exists_iter_inner a b it = inright pf) <->
     (exists n, ex_subtype a b (iterator_to_path b it) n = Some false).
 Proof.
   intros. pose proof (ex_sub_corr_eq a b it). apply not_iff_compat in H.
-  assert (forall t (P : t -> Prop), ~(exists x, P x) <-> forall x, ~ (P x)).
-  { clear. repeat intro. split.
-    - repeat intro. apply H. exists x. auto.
-    - repeat intro. destruct H0. contradict H0. apply H. }
-  repeat rewrite H0 in H. clear H0. split.
+  repeat rewrite neg_exists_is_forall in H. split.
   - intros. destruct H0. rewrite<- ex_sub_always_ne in H. apply H. intros. rewrite H0. intro. inject H1.
   - intros. rewrite<- ex_sub_always_ne in H. rewrite<- H in H0. destruct (exists_iter_inner a b it).
     + pose proof (H0 s). exfalso. apply H1. auto.
     + exists n. auto.
 Qed.
 
+(* like  ex_sub_corr_eq but for forall-exists this time *)
 Lemma fa_sub_corr_eq: forall a b it,
     (exists pf, forall_iter_inner a b it = left pf) <->
     exists n, fa_ex_subtype a b (iterator_to_path a it) n = Some true.
@@ -1286,43 +1170,113 @@ Proof.
   - induction it using iter_rect.
     + destruct (forall_iter_inner a b it).
       * eexists; eauto.
-      * destruct H as [n Hrm]. destruct n.
-        ** inject Hrm.
-        ** cbn in Hrm. unfold ex_sub_ex in Hrm. destruct (ex_sub_len _ _) in Hrm.
-           destruct e0 as [n' Hr].
-           assert (exists n, ex_subtype (fst (lookup_path a (iterator_to_path a it))) b (fst (extend_list b nil)) n = Some x).
-           { exists n'. auto. }
-           rewrite<- itp_correct in H. rewrite extend_start in H. cbn in H.
-           destruct (nonempty_rem _ it). destruct (next_empty _ _ _ H0 H1). inject H2. destruct x.
-           *** rewrite<- ex_sub_corr_eq in H. destruct H. destruct x. clear H.
-               specialize (a0 _ (iterator_has_clauses _)). destruct a0. apply e in H1. destruct H1 as [t' [Ha Hb]].
-               inject Ha; [|inject H1]. apply Hb in H. contradict H. auto.
-           *** inject Hrm.
+      * destruct H as [n Hrm].
+        destruct n; cbn in Hrm; unfold ex_sub_ex in Hrm; destruct (ex_sub_len _ _) in Hrm;
+          rewrite list_step_correct in Hrm; rewrite H0 in Hrm; cbn in Hrm;
+           destruct x; try (inject Hrm); rewrite<- itp_correct in e0;
+           destruct (nonempty_rem _ it); pose proof (next_empty _ _ _ H0 H);
+           inject H1;  inject H2; apply e in H; destruct H as [t' [Ha Hb]];
+           inject Ha; try (inject H); rewrite extend_start in e0; cbn in e0;
+           rewrite<- ex_sub_corr_eq in e0; destruct e0; clear H; destruct x;
+           destruct (a0 _ (iterator_has_clauses b)); apply Hb in H; apply H in H1;
+           inversion H1.
     + destruct (forall_iter_inner a b it1).
       * eexists; eauto.
       * exfalso. destruct (nonempty_rem _ it1). pose proof (next_step_next _ _ _ _ _ H1 H0).
-        destruct H. destruct x0; cbn in *; try (inject H). unfold ex_sub_ex in H. destruct (ex_sub_len _ _) in H.
-        rewrite<- itp_correct in e0. rewrite extend_start in e0. cbn in e0.
-        destruct x1.
-        ** rewrite<- ex_sub_corr_eq in e0. destruct e0. destruct x1. clear H3. rewrite list_step_correct in H. rewrite H0 in H.
-           cbn in *.
-           assert (exists n, fa_ex_subtype a b (iterator_to_path a it2) n = Some true).
-           { eexists; eauto. }
-           apply IHit1 in H3. clear IHit1. destruct H3. clear H3.
-           apply e in H1. clear e. destruct H1 as [t' [Ha Hb]]. inject Ha.
-           *** specialize (a0 _ (iterator_has_clauses _)). destruct a0. apply Hb in H1. contradict H1. auto.
-           *** eapply x2 in H2; eauto. destruct H2 as [t'' [Hc Hd]]. apply Hb in Hc. contradict Hc. auto.
-        ** rewrite<- ex_sub_corr_ieq in  e0. destruct e0. clear H3. inject H.
+        destruct H. destruct x0; cbn in *; try (inject H);
+                      unfold ex_sub_ex in H; destruct (ex_sub_len _ _) in H.
+        ** destruct x0; [|inject H]. rewrite list_step_correct in H. rewrite H0 in H.
+           cbn in H. inject H.
+        ** destruct x1.
+           *** rewrite<- itp_correct in e0.  rewrite extend_start in e0. cbn in e0.
+               rewrite<- ex_sub_corr_eq in e0. destruct e0. destruct x1. clear H3.
+               apply e in H1. destruct H1 as [t [Ha Hb]]. inject Ha.
+               **** destruct(a0 _ (iterator_has_clauses _)). apply Hb in H1.
+                    apply H1 in H3. inject H3.
+               **** rewrite list_step_correct in H. rewrite H0 in H. cbn in H.
+                    assert ((exists n : nat, fa_ex_subtype a b (iterator_to_path a it2) n = Some true)).
+                    { eexists. eauto. }
+                    apply IHit1 in H3. clear IHit1. destruct H3. eapply x2 with (t:=t) in H2; auto.
+                    destruct H2 as [t' [Hc Hd]]. apply Hb in Hc. apply Hc in Hd. inject Hd.
+           *** inject H. 
 Qed.
-                                                                                        
-  
-    (*
-End JuliaSub.
-Require dpdgraph.dpdgraph
-Print FileDependGraph JuliaSub. 
-*)
 
-Compute subtype (union (tuple2 (atom 1) (atom 3))
-                       (tuple2 (atom 2) (atom 4)))
-        (tuple2 (union (atom 1) (atom 2)) (union (atom 3) (atom 4))). 
-Recursive Extraction subtype. 
+(* ibid, now for nontrue results *)
+Lemma fa_sub_always_ne : forall a b it,
+    (forall m, fa_ex_subtype a b (iterator_to_path a it) m <> Some true)
+    <-> (exists n, fa_ex_subtype a b (iterator_to_path a it) n = Some false).
+Proof.
+  intros. split.
+  - induction it using iter_rect; intros H0.
+    + pose proof (H0 0). clear H0. cbn in H1. rewrite list_step_correct in H1; rewrite H in H1; cbn in *.
+      destruct (ex_sub_ex _) eqn:Hese; try (contradiction). exists 0. cbn. rewrite Hese. auto.
+    + destruct (ex_sub_ex (fst (lookup_path a (iterator_to_path a it1))) b) eqn:Hese.
+      * destruct (IHit1).
+        ** intros. pose proof (H0 (S m)). cbn in H1. rewrite Hese in H1.
+           rewrite list_step_correct in H1. rewrite H in H1. cbn in H1. auto.
+        ** exists (S x). cbn. rewrite Hese. rewrite list_step_correct. rewrite H. cbn. auto.
+      * exists 0. cbn. rewrite Hese. auto.
+  - intros H0. destruct H0. generalize dependent x. induction it using iter_rect; intros. 
+    + destruct x; cbn in H0; rewrite list_step_correct in H0; rewrite H in H0; cbn in H0;
+        destruct (ex_sub_ex _) eqn:Hese in H0; try (inject H0);
+          destruct m; cbn; rewrite Hese; intro; try (inject H1); try (inject H0).
+    + destruct x.
+      * cbn in H0. rewrite list_step_correct in H0; rewrite H in H0; cbn in H0.
+        destruct (ex_sub_ex _) eqn:Hese in H0; try (inject H0).
+        destruct m; cbn; rewrite Hese; intro; inject H1.
+      * cbn in H0. rewrite list_step_correct in H0; rewrite H in H0; cbn in H0.
+        destruct (ex_sub_ex _) eqn:Hese in H0.
+        ** destruct m.
+           *** cbn in *. rewrite Hese in *. rewrite list_step_correct; rewrite H; cbn. intro. inject H1.
+           *** eapply IHit1 in H0. cbn. rewrite Hese. rewrite list_step_correct; rewrite H; cbn. apply H0.
+        ** destruct m; cbn; rewrite Hese; try (intro; inject H1; fail).         
+Qed.
+
+(* ibid *)
+Lemma fa_sub_corr_ieq : forall a b it,
+    (exists pf, forall_iter_inner a b it = right pf) <->
+    exists n, fa_ex_subtype a b (iterator_to_path a it) n = Some false.
+Proof.
+  intros. pose proof (fa_sub_corr_eq a b it). apply not_iff_compat in H.
+  repeat rewrite neg_exists_is_forall in H. split.
+  - intros. destruct H0. apply fa_sub_always_ne. apply H. rewrite H0. intros. intro. inject H1. 
+  - intros. rewrite fa_sub_always_ne in H. rewrite<- H in H0. destruct (forall_iter_inner a b it).
+    + pose proof (H0 e). exfalso. apply H1. auto.
+    + exists e. auto.
+Qed.
+
+(* there exists some amount of fuel that will get a computable answer r out of
+   fa_ex_subtype *)
+Lemma ex_fa_ex (a b : type) :
+  { r | exists n, fa_ex_subtype a b (fst (extend_list a nil)) n = Some r}.
+Proof.
+  intros. remember (fst (extend_list a nil)). rewrite extend_start in Heql.
+  cbn in *. remember (start_iterator a). clear Heqt. subst. induction t using iter_rect.
+  - destruct (ex_sub_ex (fst (lookup_path a (iterator_to_path a t))) b) eqn:Hex.
+    + exists true. exists (S 0). cbn. rewrite Hex. rewrite list_step_correct.
+      rewrite H. cbn. auto.
+    + exists false. exists (S 0). cbn. rewrite Hex. auto. 
+  - destruct IHt1. destruct x.
+    + destruct (ex_sub_ex (fst (lookup_path a (iterator_to_path a t1))) b) eqn:Hese.
+      * exists true. destruct e. exists (S x). cbn in *. rewrite Hese.
+        rewrite list_step_correct. rewrite H. cbn. auto.
+      * exists false. destruct e. exists (S 0). cbn. rewrite Hese. auto.
+    + exists false. destruct e. exists (S x). cbn. rewrite list_step_correct. rewrite H.
+      cbn. rewrite H0.
+      destruct (ex_sub_ex (fst (lookup_path a (iterator_to_path a t1))) b) eqn:Hese; auto. 
+Qed.
+
+(* we can use the stack representation of types to conclude subtyping, just as the other two did *)
+Definition stack_subtype (a b: type) : {NormalSubtype a b} + {~NormalSubtype a b}.
+Proof.
+  intros. destruct (ex_fa_ex a b). rewrite extend_start in e. cbn in e. destruct x.
+  - rewrite<- fa_sub_corr_eq in e.
+    left. destruct e. pose proof (x (clauses a) (iterator_has_clauses a)).
+    unfold NormalSubtype. intros. rewrite<- clauses_in_type in H1. apply H0 in H1.
+    destruct H1. exists x0. rewrite<- clauses_in_type. auto.
+  - rewrite<- fa_sub_corr_ieq in e. right.
+    destruct e. pose proof (x (clauses a) (iterator_has_clauses a)).
+    unfold NormalSubtype. intro. destruct H0 as [t [Ha Hb]].  rewrite clauses_in_type in Ha.
+    apply H1 in Ha. destruct Ha as [t' [Hc Hd]]. rewrite<- clauses_in_type in Hc. apply Hb in Hc.
+    apply Hc in Hd. inversion Hd.
+Qed.

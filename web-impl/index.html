@@ -18,14 +18,17 @@
 	Note that fields are validated; check to make sure that types parsed and were valid against the type
 	language if the submit button won't work. The subtyping symbol will then change to indicate whether the
 	relation holds or not and an execution trace will be produced.</p>
-	<p>To try some examples from our paper - as well as some we've came up with while developing this
-	application, a number of examples are provided. To use an example, click it to load it into the inputs
-	and then click select.</p>
+	<p>Examples from our paper - as well as some we've came up with while developing this
+	application - are provided below. To use an example, click it to load it into the inputs
+	and then click submit.</p>
 	<p>A trace of algorithm execution will be produced when a query is entered. The algorithm will explore every
 	configuration of choice for the type on the left-hand-side (shown in the leftmost column) to ensure that there
 	is some choice of union option on the right-hand-side (shown in the second to left column) such that basic subtyping
 	holds. To aid in understanding, a graphic illustration of the types and the choices made through them will also be produced.
 	The algorithm aims to demonstrate that for every choice there exists some choice on the right such that subtyping holds.</p>
+	<p>
+		The grammar of types is t ::= Atom(number) | Tuple1(t) | Tuple2(t1,t2) | Union(t1,t2). Input errors will either be parser errors (invalid identifier, mismatched parenthesis), or invalid type errors (for example, a Tuple2 with only one element).
+	</p>
 	</div>
 	</div>
 	<div class="row">
@@ -153,8 +156,8 @@ function make_graphic_cell(chl, ast, good) {
 }
 
 function render_success_case(evidence, lhs_ast, rhs_ast) {
-	var fa_cell = make_cell(true, render_choice_list(evidence.fa))
-	var fa_graphic_cell = make_graphic_cell(evidence.fa, lhs_ast, evidence.bdex.length == 0)
+	var fa_cell = a => make_cell(true, render_choice_list(evidence.fa))
+	var fa_graphic_cell = a => make_graphic_cell(evidence.fa, lhs_ast, evidence.bdex.length == 0)
 
 	var failing_attempts = evidence.bdex.map(ex => make_cell(false, render_choice_list(ex))).reverse()
 	var passing_attempt = make_cell(true, render_choice_list(evidence.gdex))
@@ -171,8 +174,8 @@ function render_success_case(evidence, lhs_ast, rhs_ast) {
 	ex_graphic_cells.push(suex_graphic)
 	var outp_table = $("#results")[0]
 	for (var i = 0; i < rhs_cells.length; i++) {
-		outp_table.append(make_row(i == 0 ? fa_cell : make_cell(true, ""), rhs_cells[i], 
-			[i == 0? fa_graphic_cell : make_cell(i == rhs_cells.length-1, ""), ex_graphic_cells[i]]))
+		outp_table.append(make_row(fa_cell(), rhs_cells[i], 
+			[i == 0? fa_graphic_cell() : make_cell(i == rhs_cells.length-1, ""), ex_graphic_cells[i]]))
 	}
 	outp_table.hidden = false
 }
